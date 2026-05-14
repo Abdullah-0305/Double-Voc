@@ -1,0 +1,8 @@
+# Dépendances Node.js
+node_modules/
+
+# Fichiers de configuration et secrets
+.env
+
+# Fichiers de logs éventuels
+*.log

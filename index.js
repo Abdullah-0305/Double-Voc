@@ -196,3 +196,14 @@ botSpeakers.forEach((bot, index) => {
     bot.once(Events.ClientReady, () => console.log(`🟢 Speaker ${index + 1} prêt !`));
     bot.login(tokensSpeakers[index]);
 });
+
+// --- FAUX SERVEUR WEB POUR RENDER ---
+const http = require('http');
+const port = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Le bot Discord est en ligne et fonctionne parfaitement !\n');
+}).listen(port, () => {
+    console.log(`🌐 Faux serveur web démarré sur le port ${port} pour Render !`);
+});
+// -----------------------------------------------

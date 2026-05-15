@@ -23,7 +23,7 @@ lecteurAudio.on(AudioPlayerStatus.Idle, () => {
     lecteurAudio.play(createAudioResource(mixeurGlobal, { inputType: StreamType.Raw }));
 });
 
-// --- INITIALISATION DES 7 BOTS ---
+// --- INITIALISATION DES BOTS ---
 const clientOptions = { intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMembers] };
 
 const botListener = new Client(clientOptions);
@@ -66,7 +66,7 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply("🛑 Arrêt du système en cours...");
 
         getVoiceConnection(guild.id, 'listener_group')?.destroy();
-        for (let i = 2; i <= 7; i++) {
+        for (let i = 2; i <= NB_GROUPES; i++) {
             getVoiceConnection(guild.id, `speaker_group_${i}`)?.destroy();
         }
 
@@ -95,7 +95,6 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply(`Création des salons vocaux pour ${NB_GROUPES} groupes.`);
 
         try {
-            // CRÉATION DE LA CATÉGORIE AVEC PERMISSIONS PRIVÉES
             const categorie = await guild.channels.create({
                 name: `🔴 RAID - ${NB_GROUPES} GROUPES`,
                 type: ChannelType.GuildCategory,
@@ -112,22 +111,25 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
                 ],
             });
 
+            // 👑 SALON LEAD
             const salonLead = await guild.channels.create({
                 name: '👑 RAID LEAD',
                 type: ChannelType.GuildVoice,
-                parent: categorie.id, // Hérite automatiquement des permissions de la catégorie
+                parent: categorie.id,
             });
 
-            const connListener = joinVoiceChannel({
+            const connLead = joinVoiceChannel({
                 channelId: salonLead.id,
                 guildId: guild.id,
                 adapterCreator: guild.voiceAdapterCreator,
                 group: 'listener_group', 
-                selfMute: true, selfDeaf: false
+                selfMute: false, selfDeaf: false // 🔄 Modifié : Il écoute ET il parle
             });
 
-            ecouterRaidLead(connListener, salonLead.guild);
+            connLead.subscribe(lecteurAudio); // 🔄 Modifié : Il s'abonne au flux audio
+            ecouterSalon(connLead, salonLead.guild); // 🔄 Modifié : Il écoute
 
+            // ⚔️ SALONS GROUPES
             for (let i = 2; i <= NB_GROUPES; i++) {
                 const salonGroupe = await guild.channels.create({
                     name: `⚔️ GROUPE ${i}`,
@@ -137,19 +139,20 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
 
                 const botHautParleurActuel = botSpeakers[i - 2];
 
-                const connSpeaker = joinVoiceChannel({
+                const connGroupe = joinVoiceChannel({
                     channelId: salonGroupe.id,
                     guildId: guild.id,
                     adapterCreator: botHautParleurActuel.guilds.cache.get(GUILD_ID).voiceAdapterCreator,
                     group: `speaker_group_${i}`, 
-                    selfMute: false, selfDeaf: true
+                    selfMute: false, selfDeaf: false // 🔄 Modifié : Il écoute ET il parle
                 });
 
-                connSpeaker.subscribe(lecteurAudio);
+                connGroupe.subscribe(lecteurAudio);
+                ecouterSalon(connGroupe, salonGroupe.guild); // 🔄 Modifié : Il écoute aussi !
             }
 
             lecteurAudio.play(createAudioResource(mixeurGlobal, { inputType: StreamType.Raw }));
-            await interaction.editReply(`✅ Salons vocaux crées.`);
+            await interaction.editReply(`✅ Salons vocaux crées. Tous les bots sont bidirectionnels.`);
 
         } catch (error) {
             console.error(error);
@@ -158,14 +161,15 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-// --- GESTION DE LA VOIX DU LEAD ---
-function ecouterRaidLead(connexionListener, guild) {
-    connexionListener.receiver.speaking.on('start', (userId) => {
+// --- 🎤 GESTION DE LA VOIX (POUR TOUS LES BOTS) ---
+function ecouterSalon(connexion, guild) {
+    connexion.receiver.speaking.on('start', (userId) => {
         const member = guild.members.cache.get(userId);
         
+        // Seuls ceux qui ont le ROLE_AUTHORISE_ID verront leur voix envoyée dans le mixeur global
         if (!member || !member.roles.cache.has(ROLE_AUTHORISE_ID)) return;
 
-        const fluxAudio = connexionListener.receiver.subscribe(userId, {
+        const fluxAudio = connexion.receiver.subscribe(userId, {
             end: { behavior: EndBehaviorType.AfterSilence, duration: 100 },
         });
 

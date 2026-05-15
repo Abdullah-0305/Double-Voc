@@ -11,6 +11,7 @@ const {
 const ROLE_AUTHORISE_ID = process.env.ROLE_AUTHORISE_ID;
 const ROLE_PARTICIPANT_ID = process.env.ROLE_PARTICIPANT_ID;
 const GUILD_ID = process.env.GUILD_ID;
+const NB_GROUPES = process.env.NB_GROUPES;
 
 // --- LA TABLE DE MIXAGE ---
 const mixeurGlobal = new Mixer({ channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 });
@@ -27,6 +28,7 @@ const clientOptions = { intents: [GatewayIntentBits.Guilds, GatewayIntentBits.Gu
 
 const botListener = new Client(clientOptions);
 const botSpeakers = [
+    new Client(clientOptions), new Client(clientOptions), new Client(clientOptions),
     new Client(clientOptions), new Client(clientOptions), new Client(clientOptions),
     new Client(clientOptions), new Client(clientOptions), new Client(clientOptions)
 ];
@@ -90,12 +92,12 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
     // 🟢 COMMANDE : /RAID
     // ==========================================
     if (interaction.commandName === 'raid') {
-        await interaction.reply(`Création des salons vocaux pour 8 groupes.`);
+        await interaction.reply(`Création des salons vocaux pour ${NB_GROUPES} groupes.`);
 
         try {
             // CRÉATION DE LA CATÉGORIE AVEC PERMISSIONS PRIVÉES
             const categorie = await guild.channels.create({
-                name: `🔴 RAID - 7 GROUPES`,
+                name: `🔴 RAID - ${NB_GROUPES} GROUPES`,
                 type: ChannelType.GuildCategory,
                 position: 4,
                 permissionOverwrites: [
@@ -126,7 +128,7 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
 
             ecouterRaidLead(connListener, salonLead.guild);
 
-            for (let i = 2; i <= 7; i++) {
+            for (let i = 2; i <= NB_GROUPES; i++) {
                 const salonGroupe = await guild.channels.create({
                     name: `⚔️ GROUPE ${i}`,
                     type: ChannelType.GuildVoice,
@@ -186,7 +188,8 @@ botListener.login(process.env.LISTENER_TOKEN);
 
 const tokensSpeakers = [
     process.env.SPEAKER_TOKEN_1, process.env.SPEAKER_TOKEN_2, process.env.SPEAKER_TOKEN_3,
-    process.env.SPEAKER_TOKEN_4, process.env.SPEAKER_TOKEN_5, process.env.SPEAKER_TOKEN_6
+    process.env.SPEAKER_TOKEN_4, process.env.SPEAKER_TOKEN_5, process.env.SPEAKER_TOKEN_6,
+    process.env.SPEAKER_TOKEN_7, process.env.SPEAKER_TOKEN_8, process.env.SPEAKER_TOKEN_9
 ];
 
 botSpeakers.forEach((bot, index) => {

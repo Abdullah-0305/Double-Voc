@@ -37,7 +37,7 @@ const botSpeakers = [
 
 // --- ENREGISTREMENT DES COMMANDES ---
 botListener.once(Events.ClientReady, async () => {
-    console.log(`🟢 COMMANDANT EN LIGNE : ${botListener.user.tag}`);
+    console.log(`🟢 BOT EN LIGNE : ${botListener.user.tag}`);
     
     const guild = botListener.guilds.cache.get(GUILD_ID);
     if (guild) {
@@ -84,6 +84,16 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
             }
             
             await interaction.editReply("✅ Système de Raid désactivé et salons nettoyés avec succès !");
+
+            botSpeakers.forEach(bot => {
+                if (bot.isReady()) bot.destroy();
+            })
+
+            botListener.destroy();
+
+            setTimeout(() => {
+                process.exit(0);
+            }, 2000);
         } catch (e) {
             console.error(e);
             await interaction.editReply("⚠️ Erreur lors de la suppression des salons.");

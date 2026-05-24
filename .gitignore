@@ -6,3 +6,5 @@ node_modules/
 
 # Fichiers de logs éventuels
 *.log
+*.zip
+*.exe

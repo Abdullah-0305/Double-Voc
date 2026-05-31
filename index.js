@@ -1,6 +1,104 @@
 require('dotenv').config();
 require('opusscript');
 
+
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+
+// --- AUTO-UPDATER CONFIGURATION ---
+const GITHUB_REPO = 'Abdullah-0305/Double-Voc'; // 👈 À MODIFIER (ex: 'Gree/Double-Voc')
+const CURRENT_VERSION = 'v1.1.0'; 
+
+async function checkAndUpdate() {
+    // Sécurité : On ne lance la maj que si le bot tourne via le .exe compilé
+    if (typeof process.pkg === 'undefined') return;
+
+    console.log("🔄 Recherche de mise à jour...");
+    const exeName = path.basename(process.execPath);
+
+    const options = {
+        hostname: 'api.github.com',
+        path: `/repos/${GITHUB_REPO}/releases/latest`,
+        headers: { 'User-Agent': 'BotRaid-Updater' }
+    };
+
+    return new Promise((resolve) => {
+        https.get(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const release = JSON.parse(data);
+                    // Si on trouve une version différente de la nôtre
+                    if (release.tag_name && release.tag_name !== CURRENT_VERSION) {
+                        console.log(`✨ Nouvelle version trouvée : ${release.tag_name} ! Téléchargement...`);
+                        
+                        // Cherche le fichier qui se termine par .exe dans les assets GitHub
+                        const asset = release.assets.find(a => a.name.endsWith('.exe'));
+                        if (asset) {
+                            telechargerEtInstaller(asset.browser_download_url, exeName);
+                        } else {
+                            console.log("⚠️ Aucun exécutable trouvé dans la release.");
+                            resolve();
+                        }
+                    } else {
+                        console.log("✅ Le système est à jour.");
+                        resolve();
+                    }
+                } catch (e) {
+                    console.log("⚠️ Impossible de lire les versions GitHub.");
+                    resolve();
+                }
+            });
+        }).on('error', () => {
+            console.log("⚠️ Impossible de se connecter à GitHub.");
+            resolve();
+        });
+    });
+}
+
+function telechargerEtInstaller(url, exeName) {
+    const updateFile = 'BotUpdate.tmp';
+    
+    // GitHub fait des redirections pour les téléchargements, on doit les suivre
+    https.get(url, (res) => {
+        if (res.statusCode === 302 || res.statusCode === 301) {
+            https.get(res.headers.location, (redirectRes) => {
+                const file = fs.createWriteStream(updateFile);
+                redirectRes.pipe(file);
+                file.on('finish', () => {
+                    file.close();
+                    installerMiseAJour(exeName, updateFile);
+                });
+            });
+        }
+    });
+}
+
+function installerMiseAJour(exeName, updateFile) {
+    console.log("🛠️ Téléchargement terminé ! Redémarrage pour installation...");
+    
+    // On crée un petit script BAT qui va faire le remplacement
+    const batContent = `
+@echo off
+timeout /t 3 /nobreak > NUL
+move /y "${updateFile}" "${exeName}"
+start "" "${exeName}"
+del "%~f0"
+    `;
+    fs.writeFileSync('update.bat', batContent);
+
+    // On lance le script de manière détachée et on "suicide" le bot actuel
+    const bat = spawn('cmd.exe', ['/c', 'update.bat'], {
+        detached: true,
+        stdio: 'ignore'
+    });
+    bat.unref();
+    process.exit(0); 
+}
+
 const { Client, GatewayIntentBits, Events, ChannelType, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const prism = require('prism-media');
 const { Mixer } = require('audio-mixer');
@@ -299,15 +397,21 @@ function ecouterChefGroupe(connexion, guild) {
 }
 
 // --- LANCEMENT DE TOUS LES BOTS ---
-botListener.login(process.env.LISTENER_TOKEN);
+(async () => {
+    // On vérifie d'abord les maj GitHub
+    await checkAndUpdate();
 
-const tokensSpeakers = [
-    process.env.SPEAKER_TOKEN_1, process.env.SPEAKER_TOKEN_2, process.env.SPEAKER_TOKEN_3,
-    process.env.SPEAKER_TOKEN_4, process.env.SPEAKER_TOKEN_5, process.env.SPEAKER_TOKEN_6,
-    process.env.SPEAKER_TOKEN_7, process.env.SPEAKER_TOKEN_8, process.env.SPEAKER_TOKEN_9
-];
+    // S'il n'y a pas de maj, on allume les bots normalement
+    botListener.login(process.env.LISTENER_TOKEN);
 
-botSpeakers.forEach((bot, index) => {
-    bot.once(Events.ClientReady, () => console.log(`🟢 Speaker ${index + 1} prêt !`));
-    bot.login(tokensSpeakers[index]);
-});
+    const tokensSpeakers = [
+        process.env.SPEAKER_TOKEN_1, process.env.SPEAKER_TOKEN_2, process.env.SPEAKER_TOKEN_3,
+        process.env.SPEAKER_TOKEN_4, process.env.SPEAKER_TOKEN_5, process.env.SPEAKER_TOKEN_6,
+        process.env.SPEAKER_TOKEN_7, process.env.SPEAKER_TOKEN_8, process.env.SPEAKER_TOKEN_9
+    ];
+
+    botSpeakers.forEach((bot, index) => {
+        bot.once(Events.ClientReady, () => console.log(`🟢 Speaker ${index + 1} prêt !`));
+        bot.login(tokensSpeakers[index]);
+    });
+})();

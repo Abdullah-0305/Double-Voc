@@ -1,7 +1,7 @@
 require('dotenv').config();
 require('opusscript');
 
-const { Client, GatewayIntentBits, Events, ChannelType, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, Events, ChannelType, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const prism = require('prism-media');
 const { Mixer } = require('audio-mixer');
 const { 
@@ -10,22 +10,35 @@ const {
 } = require('@discordjs/voice');
 
 // --- CONFIGURATION ---
-const ROLE_AUTHORISE_ID = process.env.ROLE_AUTHORISE_ID;
+const ROLE_AUTHORISE_ID = process.env.ROLE_AUTHORISE_ID; // Le Raid Lead (RL)
+const ROLE_CHEF_GROUPE_ID = process.env.ROLE_CHEF_GROUPE_ID; // Le Chef de Groupe
 const ROLE_PARTICIPANT_ID = process.env.ROLE_PARTICIPANT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const NB_GROUPES = process.env.NB_GROUPES;
 
-// --- LA TABLE DE MIXAGE ---
+// --- VARIABLES GLOBALES ---
+const intercomChefs = new Set(); // Retient quels chefs de groupe ont activé leur micro vers le RL
+
+// --- LES TABLES DE MIXAGE & LECTEURS ---
+// 1. Mixeur Global (Diffuse la voix du RL vers TOUS les groupes)
 const mixeurGlobal = new Mixer({ channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 });
 mixeurGlobal.setMaxListeners(0);
-
-const lecteurAudio = createAudioPlayer();
-lecteurAudio.on('error', e => console.error(`⚠️ Erreur lecteur: ${e.message}`));
-lecteurAudio.on(AudioPlayerStatus.Idle, () => {
-    lecteurAudio.play(createAudioResource(mixeurGlobal, { inputType: StreamType.Raw }));
+const lecteurGlobal = createAudioPlayer();
+lecteurGlobal.on('error', e => console.error(`⚠️ Erreur lecteur global: ${e.message}`));
+lecteurGlobal.on(AudioPlayerStatus.Idle, () => {
+    lecteurGlobal.play(createAudioResource(mixeurGlobal, { inputType: StreamType.Raw }));
 });
 
-// --- INITIALISATION DES 7 BOTS ---
+// 2. Mixeur pour le RL (Diffuse la voix des Chefs de Groupe uniquement au RL)
+const mixeurPourRL = new Mixer({ channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 });
+mixeurPourRL.setMaxListeners(0);
+const lecteurRL = createAudioPlayer();
+lecteurRL.on('error', e => console.error(`⚠️ Erreur lecteur RL: ${e.message}`));
+lecteurRL.on(AudioPlayerStatus.Idle, () => {
+    lecteurRL.play(createAudioResource(mixeurPourRL, { inputType: StreamType.Raw }));
+});
+
+// --- INITIALISATION DES BOTS ---
 const clientOptions = { intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMembers] };
 
 const botListener = new Client(clientOptions);
@@ -55,10 +68,41 @@ botListener.once(Events.ClientReady, async () => {
     }
 });
 
-// --- RÉCEPTION DES COMMANDES ---
+// --- RÉCEPTION DES COMMANDES ET BOUTONS ---
 botListener.on(Events.InteractionCreate, async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
+    
+    // ==========================================
+    // 🎛️ GESTION DU BOUTON INTERCOM DES CHEFS
+    // ==========================================
+    if (interaction.isButton()) {
+        if (interaction.customId === 'toggle_intercom') {
+            // Vérifier que celui qui clique a bien le rôle Chef de Groupe
+            if (!interaction.member.roles.cache.has(ROLE_CHEF_GROUPE_ID)) {
+                return interaction.reply({ content: "⛔ Accès refusé. Seuls les Chefs de Groupe peuvent utiliser ce bouton.", ephemeral: true });
+            }
 
+            const userId = interaction.user.id;
+
+            // Si le chef est déjà en mode transmission (ON), on l'éteint (OFF)
+            if (intercomChefs.has(userId)) {
+                intercomChefs.delete(userId);
+                return interaction.reply({ 
+                    content: "🔴 **INTERCOM COUPÉ** : Le Raid Lead ne t'entend plus. Tu parles uniquement à ton groupe local.", 
+                    ephemeral: true 
+                });
+            } 
+            // Sinon on l'active (ON)
+            else {
+                intercomChefs.add(userId);
+                return interaction.reply({ 
+                    content: "🟢 **INTERCOM ACTIF** : Le Raid Lead t'entendra directement dans son casque dès que tu parleras !", 
+                    ephemeral: true 
+                });
+            }
+        }
+    }
+
+    if (!interaction.isChatInputCommand()) return;
     const guild = interaction.guild;
 
     // ==========================================
@@ -66,9 +110,10 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
     // ==========================================
     if (interaction.commandName === 'stop') {
         await interaction.reply("🛑 Arrêt du système en cours...");
+        intercomChefs.clear();
 
         getVoiceConnection(guild.id, 'listener_group')?.destroy();
-        for (let i = 2; i <= 7; i++) {
+        for (let i = 2; i <= NB_GROUPES; i++) {
             getVoiceConnection(guild.id, `speaker_group_${i}`)?.destroy();
         }
 
@@ -87,13 +132,10 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
 
             botSpeakers.forEach(bot => {
                 if (bot.isReady()) bot.destroy();
-            })
-
+            });
             botListener.destroy();
 
-            setTimeout(() => {
-                process.exit(0);
-            }, 2000);
+            setTimeout(() => { process.exit(0); }, 2000);
         } catch (e) {
             console.error(e);
             await interaction.editReply("⚠️ Erreur lors de la suppression des salons.");
@@ -107,27 +149,23 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply(`Création des salons vocaux pour ${NB_GROUPES} groupes.`);
 
         try {
-            // CRÉATION DE LA CATÉGORIE AVEC PERMISSIONS PRIVÉES
+            intercomChefs.clear();
+
             const categorie = await guild.channels.create({
                 name: `🔴 RAID - ${NB_GROUPES} GROUPES`,
                 type: ChannelType.GuildCategory,
                 position: 4,
                 permissionOverwrites: [
-                    {
-                        id: guild.roles.everyone.id,
-                        deny: [PermissionFlagsBits.ViewChannel],
-                    },
-                    {
-                        id: ROLE_PARTICIPANT_ID,
-                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
-                    }
+                    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+                    { id: ROLE_PARTICIPANT_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect] }
                 ],
             });
 
+            // 👑 SALON RAID LEAD
             const salonLead = await guild.channels.create({
                 name: '👑 RAID LEAD',
                 type: ChannelType.GuildVoice,
-                parent: categorie.id, // Hérite automatiquement des permissions de la catégorie
+                parent: categorie.id,
             });
 
             const connListener = joinVoiceChannel({
@@ -135,11 +173,13 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
                 guildId: guild.id,
                 adapterCreator: guild.voiceAdapterCreator,
                 group: 'listener_group', 
-                selfMute: true, selfDeaf: false
+                selfMute: false, selfDeaf: false // Écoute le RL et lui parle (les remontées des chefs)
             });
 
-            ecouterRaidLead(connListener, salonLead.guild);
+            connListener.subscribe(lecteurRL); // Le bot du RL diffuse le mixeur contenant la voix des chefs
+            ecouterRaidLead(connListener, salonLead.guild); // Le bot écoute la voix du RL
 
+            // ⚔️ SALONS GROUPES
             for (let i = 2; i <= NB_GROUPES; i++) {
                 const salonGroupe = await guild.channels.create({
                     name: `⚔️ GROUPE ${i}`,
@@ -154,14 +194,46 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
                     guildId: guild.id,
                     adapterCreator: botHautParleurActuel.guilds.cache.get(GUILD_ID).voiceAdapterCreator,
                     group: `speaker_group_${i}`, 
-                    selfMute: false, selfDeaf: true
+                    selfMute: false, selfDeaf: false // Parle au groupe (voix du RL) et écoute le Chef de groupe
                 });
 
-                connSpeaker.subscribe(lecteurAudio);
+                connSpeaker.subscribe(lecteurGlobal); // Diffuse la voix du RL reçue du mixeur global
+                ecouterChefGroupe(connSpeaker, salonGroupe.guild); // Écoute s'il y a un chef de groupe dans le salon
             }
 
-            lecteurAudio.play(createAudioResource(mixeurGlobal, { inputType: StreamType.Raw }));
-            await interaction.editReply(`✅ Salons vocaux crées.`);
+            // 🎛️ SALON TEXTE DASHBOARD CHEFS (Privé pour les Chefs de Groupe et le RL)
+            const salonDashboard = await guild.channels.create({
+                name: '🎛️-dashboard-chefs',
+                type: ChannelType.GuildText,
+                parent: categorie.id,
+                permissionOverwrites: [
+                    { 
+                        id: guild.roles.everyone.id, 
+                        deny: [PermissionFlagsBits.ViewChannel] 
+                    },
+                    { 
+                        id: ROLE_CHEF_GROUPE_ID, 
+                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] 
+                    }
+                ],
+            });
+            const rowBouton = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('toggle_intercom')
+                    .setLabel('📻 Parler uniquement au Raid Lead (ON / OFF)')
+                    .setStyle(ButtonStyle.Primary)
+            );
+
+            await salonDashboard.send({
+                content: "**CONSOLE CHEFS DE GROUPE**\nCliquez sur le bouton ci-dessous pour ouvrir/fermer votre micro en direction du Raid Lead uniquement.\n*(Ce message est personnel, cliquez dessus n'impacte pas les autres chefs)*",
+                components: [rowBouton]
+            });
+
+            // Lancement initial des flux de mixage
+            lecteurGlobal.play(createAudioResource(mixeurGlobal, { inputType: StreamType.Raw }));
+            lecteurRL.play(createAudioResource(mixeurPourRL, { inputType: StreamType.Raw }));
+
+            await interaction.editReply(`✅ Salons vocaux et Dashboard créés avec succès.`);
 
         } catch (error) {
             console.error(error);
@@ -170,14 +242,15 @@ botListener.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-// --- GESTION DE LA VOIX DU LEAD ---
-function ecouterRaidLead(connexionListener, guild) {
-    connexionListener.receiver.speaking.on('start', (userId) => {
+// --- 👑 GESTION DE LA VOIX DU RAID LEAD (Toujours actif pour tout le monde) ---
+function ecouterRaidLead(connexion, guild) {
+    connexion.receiver.speaking.on('start', (userId) => {
         const member = guild.members.cache.get(userId);
         
+        // On vérifie que c'est bien le Raid Lead (ROLE_AUTHORISE_ID)
         if (!member || !member.roles.cache.has(ROLE_AUTHORISE_ID)) return;
 
-        const fluxAudio = connexionListener.receiver.subscribe(userId, {
+        const fluxAudio = connexion.receiver.subscribe(userId, {
             end: { behavior: EndBehaviorType.AfterSilence, duration: 100 },
         });
 
@@ -189,6 +262,36 @@ function ecouterRaidLead(connexionListener, guild) {
 
         fluxAudio.on('end', () => {
             mixeurGlobal.removeInput(piste);
+            piste.destroy?.();
+            pcmDecoder.destroy?.();
+        });
+    });
+}
+
+// --- ⚔️ GESTION DE LA VOIX DES CHEFS DE GROUPE (Filtré par bouton personnel vers le RL) ---
+function ecouterChefGroupe(connexion, guild) {
+    connexion.receiver.speaking.on('start', (userId) => {
+        // 🔒 Si ce Chef n'a pas activé son bouton personnel, on ignore totalement sa voix
+        if (!intercomChefs.has(userId)) return; 
+
+        const member = guild.members.cache.get(userId);
+        
+        // On vérifie qu'il possède bien le rôle Chef de Groupe
+        if (!member || !member.roles.cache.has(ROLE_CHEF_GROUPE_ID)) return;
+
+        const fluxAudio = connexion.receiver.subscribe(userId, {
+            end: { behavior: EndBehaviorType.AfterSilence, duration: 100 },
+        });
+
+        const pcmDecoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+        // 🎯 On injecte dans le mixeur destiné UNIQUEMENT au Raid Lead
+        const piste = mixeurPourRL.input({ channels: 2, bitDepth: 16, sampleRate: 48000 });
+
+        pcmDecoder.on('error', () => {}); 
+        fluxAudio.pipe(pcmDecoder).pipe(piste);
+
+        fluxAudio.on('end', () => {
+            mixeurPourRL.removeInput(piste);
             piste.destroy?.();
             pcmDecoder.destroy?.();
         });

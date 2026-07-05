@@ -8,7 +8,7 @@ const { spawn } = require('child_process');
 
 // --- AUTO-UPDATER CONFIGURATION ---
 const GITHUB_REPO = 'Abdullah-0305/Double-Voc';
-const CURRENT_VERSION = 'v1.1.0'; 
+const CURRENT_VERSION = 'v1.2.0'; 
 
 async function checkAndUpdate() {
     if (typeof process.pkg === 'undefined') return;
